@@ -111,7 +111,7 @@ class AutoDelayVpnService : VpnService() {
         activeSession = session
         val job = scope.launch { session.runBlockingForever() }
 
-        val connected = withTimeoutOrNull(12_000L) {
+        val connected = withTimeoutOrNull(25_000L) {
             while (!session.isConnected && !session.isFinished) {
                 delay(200)
             }
