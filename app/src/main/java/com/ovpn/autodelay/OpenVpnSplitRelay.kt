@@ -17,6 +17,14 @@ class OpenVpnSplitRelay(
     private val port: Int,
 ) {
     init { require(hosts.isNotEmpty()) }
+    private val resolvedIps: List<String> by lazy {
+        val list = mutableListOf<String>()
+        for (h in hosts) {
+            val all = runCatching { InetAddress.getAllByName(h).mapNotNull { it.hostAddress } }.getOrDefault(emptyList())
+            if (all.isNotEmpty()) list.addAll(all) else list.add(h)
+        }
+        list.distinct()
+    }
     @Volatile private var next = 0
     private val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
     val localPort: Int get() = server.localPort
@@ -40,6 +48,7 @@ class OpenVpnSplitRelay(
             val (host, up) = connect()
             upstream = up
             val t0 = System.currentTimeMillis()
+            VpnStateBus.log("  -> RELAY TCP OK: $host:$port")
             val clamped = clamp(up, HANDSHAKE_WINDOW)
             val trace = Trace(t0)
             if (clamped) thread(name = "ovpn-relay-unclamp", isDaemon = true) {
@@ -62,6 +71,7 @@ class OpenVpnSplitRelay(
             if (trace.downBytes < HANDSHAKE_BYTES) skip(host)
             runCatching { up.shutdownOutput() }
         } catch (e: Exception) {
+            VpnStateBus.log("  -> RELAY ERR: ${e.message}")
             Log.w(TAG, "relay: ${e.message}")
             runCatching { client.close() }
             runCatching { upstream?.close() }
@@ -69,22 +79,23 @@ class OpenVpnSplitRelay(
     }
 
     private fun connect(): Pair<String, Socket> {
+        val targets = resolvedIps
         var last: Exception? = null
         val start = next
-        for (i in hosts.indices) {
+        for (i in targets.indices) {
             if (closed) break
-            val at = (start + i) % hosts.size
+            val at = (start + i) % targets.size
             val socket = Socket()
             synchronized(open) { open += socket }
             try {
                 socket.tcpNoDelay = true
                 service.protect(socket)
                 socket.connect(
-                    InetSocketAddress(InetAddress.getByName(hosts[at]), port),
-                    if (hosts.size > 1) FAILOVER_CONNECT_MS else CONNECT_MS
+                    InetSocketAddress(InetAddress.getByName(targets[at]), port),
+                    if (targets.size > 1) FAILOVER_CONNECT_MS else CONNECT_MS
                 )
                 next = at
-                return hosts[at] to socket
+                return targets[at] to socket
             } catch (e: java.io.IOException) {
                 last = e
                 runCatching { socket.close() }
@@ -95,8 +106,9 @@ class OpenVpnSplitRelay(
     }
 
     private fun skip(host: String) {
-        if (hosts.size > 1 && hosts[next] == host) {
-            next = (next + 1) % hosts.size
+        val targets = resolvedIps
+        if (targets.size > 1 && targets[next] == host) {
+            next = (next + 1) % targets.size
         }
     }
 
@@ -175,8 +187,8 @@ class OpenVpnSplitRelay(
 
     companion object {
         private const val TAG = "OpenVpnRelay"
-        private const val CONNECT_MS = 6_000
-        private const val FAILOVER_CONNECT_MS = 4_000
+        private const val CONNECT_MS = 4_000
+        private const val FAILOVER_CONNECT_MS = 2_500
         private const val HANDSHAKE_BYTES = 2048L
         private const val IPPROTO_TCP = 6
         private const val TCP_WINDOW_CLAMP = 10
