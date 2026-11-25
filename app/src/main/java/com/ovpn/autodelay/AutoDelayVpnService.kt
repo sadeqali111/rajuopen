@@ -170,15 +170,27 @@ class AutoDelayVpnService : VpnService() {
                 relay = r
                 r.start()
                 val cfg = OvpnConfigParser.rewriteForLocalRelay(profile.rawConfig, r.localPort)
+                val evalErr = OpenVpnNative.evaluate(cfg)
+                if (evalErr.isNotEmpty()) {
+                    VpnStateBus.log("  -> EVAL_ERR: $evalErr")
+                    return
+                }
                 val id = OpenVpnNative.create()
-                if (id == 0L) return
+                if (id == 0L) {
+                    VpnStateBus.log("  -> CREATE_FAILED (id=0)")
+                    return
+                }
                 handle.set(id)
                 if (stopped.get()) {
                     OpenVpnNative.stop(id)
                     return
                 }
-                OpenVpnNative.run(id, cfg, username, password, this)
-            } catch (_: Exception) {
+                val runErr = OpenVpnNative.run(id, cfg, username, password, this)
+                if (runErr.isNotEmpty()) {
+                    VpnStateBus.log("  -> RUN_ERR: $runErr")
+                }
+            } catch (e: Exception) {
+                VpnStateBus.log("  -> EXCEPTION: ${e.message}")
             } finally {
                 isFinished = true
                 forceCleanup()
@@ -234,9 +246,9 @@ class AutoDelayVpnService : VpnService() {
         }
 
         @Keep fun onCoreEvent(name: String, error: Boolean) {
+            VpnStateBus.log("  -> EVENT: $name (err=$error)")
             if (name == "CONNECTED") isConnected = true
             if (name == "AUTH_FAILED") {
-                VpnStateBus.log("  -> AUTH_FAILED (check username/password)")
                 stop()
             }
         }
