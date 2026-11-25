@@ -120,8 +120,12 @@ class AutoDelayVpnService : VpnService() {
 
         var realDelay = Long.MAX_VALUE
         if (connected) {
-            delay(400)
-            realDelay = measureRealHttpDelay(5000)
+            delay(1_200)
+            for (attempt in 1..3) {
+                realDelay = measureRealHttpDelay(6_000)
+                if (realDelay < Long.MAX_VALUE) break
+                if (attempt < 3) delay(1_000)
+            }
         }
 
         session.stop()
@@ -140,11 +144,13 @@ class AutoDelayVpnService : VpnService() {
                 conn.connectTimeout = timeoutMs
                 conn.readTimeout = timeoutMs
                 conn.useCaches = false
+                conn.setRequestProperty("Connection", "close")
                 code = conn.responseCode
                 conn.disconnect()
             }
             if (code == 204 || code == 200) elapsed else Long.MAX_VALUE
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            VpnStateBus.log("  -> HTTP ERR: ${e.javaClass.simpleName}: ${e.message}")
             Long.MAX_VALUE
         }
     }
