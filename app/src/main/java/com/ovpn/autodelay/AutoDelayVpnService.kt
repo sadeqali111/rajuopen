@@ -140,7 +140,7 @@ class AutoDelayVpnService : VpnService() {
         return try {
             var code = 0
             val elapsed = measureTimeMillis {
-                val conn = URL("http://www.gstatic.com/generate_204").openConnection() as HttpURLConnection
+                val conn = URL("https://www.gstatic.com/generate_204").openConnection() as HttpURLConnection
                 conn.connectTimeout = timeoutMs
                 conn.readTimeout = timeoutMs
                 conn.useCaches = false
