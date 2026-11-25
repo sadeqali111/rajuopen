@@ -26,7 +26,7 @@ class OpenVpnSplitRelay(
         list.distinct()
     }
     @Volatile private var next = 0
-    private val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+    private val server = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
     val localPort: Int get() = server.localPort
     @Volatile private var closed = false
     private val open = mutableListOf<Socket>()
@@ -81,7 +81,11 @@ class OpenVpnSplitRelay(
     private fun connect(): Pair<String, Socket> {
         val targets = resolvedIps
         var last: Exception? = null
-        val start = next
+        val start = synchronized(this) {
+            val s = next % targets.size
+            next = (s + 1) % targets.size
+            s
+        }
         for (i in targets.indices) {
             if (closed) break
             val at = (start + i) % targets.size
@@ -94,7 +98,6 @@ class OpenVpnSplitRelay(
                     InetSocketAddress(InetAddress.getByName(targets[at]), port),
                     if (targets.size > 1) FAILOVER_CONNECT_MS else CONNECT_MS
                 )
-                next = at
                 return targets[at] to socket
             } catch (e: java.io.IOException) {
                 last = e
@@ -107,7 +110,7 @@ class OpenVpnSplitRelay(
 
     private fun skip(host: String) {
         val targets = resolvedIps
-        if (targets.size > 1 && targets[next] == host) {
+        if (targets.size > 1 && targets[next % targets.size] == host) {
             next = (next + 1) % targets.size
         }
     }
@@ -187,8 +190,8 @@ class OpenVpnSplitRelay(
 
     companion object {
         private const val TAG = "OpenVpnRelay"
-        private const val CONNECT_MS = 4_000
-        private const val FAILOVER_CONNECT_MS = 2_500
+        private const val CONNECT_MS = 3_000
+        private const val FAILOVER_CONNECT_MS = 1_500
         private const val HANDSHAKE_BYTES = 2048L
         private const val IPPROTO_TCP = 6
         private const val TCP_WINDOW_CLAMP = 10
