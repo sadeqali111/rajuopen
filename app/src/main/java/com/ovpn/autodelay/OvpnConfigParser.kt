@@ -14,35 +14,63 @@ data class OvpnProfileItem(
 object OvpnConfigParser {
 
     fun parseFromZip(zipStream: InputStream): List<OvpnProfileItem> {
-        val profiles = mutableListOf<OvpnProfileItem>()
-        val seenHosts = mutableSetOf<String>()
-        val remoteRegex = Regex("^remote\\s+(\\S+)\\s+(\\d+)", RegexOption.MULTILINE)
+        val certs = mutableMapOf<String, String>()
+        val rawOvpnFiles = mutableListOf<Pair<String, String>>()
 
         ZipInputStream(zipStream).use { zis ->
             var entry = zis.nextEntry
             while (entry != null) {
-                if (!entry.isDirectory && entry.name.endsWith(".ovpn", ignoreCase = true)) {
-                    val content = zis.bufferedReader().readText()
-                    val remoteMatch = remoteRegex.find(content)
-                    if (remoteMatch != null) {
-                        val host = remoteMatch.groupValues[1]
-                        val port = remoteMatch.groupValues[2].toIntOrNull() ?: 443
-                        val fileName = entry.name.substringAfterLast("/").removeSuffix(".ovpn")
-                        val key = if (host.endsWith("lazerpenguin.com", ignoreCase = true)) host.lowercase() else "$host:$port:$fileName"
-                        if (seenHosts.add(key)) {
-                            profiles.add(
-                                OvpnProfileItem(
-                                    name = fileName,
-                                    rawConfig = content,
-                                    host = host,
-                                    port = if (host.endsWith("lazerpenguin.com", ignoreCase = true)) 7011 else port
-                                )
-                            )
+                if (!entry.isDirectory) {
+                    val fileName = entry.name.substringAfterLast("/")
+                    when {
+                        fileName.endsWith(".crt", ignoreCase = true) ||
+                        fileName.endsWith(".pem", ignoreCase = true) -> {
+                            certs[fileName.lowercase()] = zis.bufferedReader().readText().trim()
+                        }
+                        fileName.endsWith(".ovpn", ignoreCase = true) -> {
+                            rawOvpnFiles.add(fileName to zis.bufferedReader().readText())
                         }
                     }
                 }
                 zis.closeEntry()
                 entry = zis.nextEntry
+            }
+        }
+
+        val profiles = mutableListOf<OvpnProfileItem>()
+        val seenHosts = mutableSetOf<String>()
+        val remoteRegex = Regex("^remote\\s+(\\S+)\\s+(\\d+)", RegexOption.MULTILINE)
+        val caRegex = Regex("^ca\\s+(\\S+)", RegexOption.MULTILINE)
+
+        for ((fileName, rawContent) in rawOvpnFiles) {
+            var content = rawContent
+            val caMatch = caRegex.find(content)
+            if (caMatch != null) {
+                val caFile = caMatch.groupValues[1].trim().substringAfterLast("/").lowercase()
+                val certBody = certs[caFile] ?: certs.values.firstOrNull()
+                if (certBody != null) {
+                    content = content.replace(caRegex, "")
+                    content += "\n<ca>\n$certBody\n</ca>\n"
+                }
+            }
+
+            val remoteMatch = remoteRegex.find(content)
+            if (remoteMatch != null) {
+                val host = remoteMatch.groupValues[1]
+                val port = remoteMatch.groupValues[2].toIntOrNull() ?: 443
+                val profileName = fileName.removeSuffix(".ovpn")
+                val isTb = host.endsWith("lazerpenguin.com", ignoreCase = true)
+                val key = if (isTb) host.lowercase() else "$host:$port:$profileName"
+                if (seenHosts.add(key)) {
+                    profiles.add(
+                        OvpnProfileItem(
+                            name = profileName,
+                            rawConfig = content,
+                            host = host,
+                            port = if (isTb) 7011 else port
+                        )
+                    )
+                }
             }
         }
         return profiles
